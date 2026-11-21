@@ -45,6 +45,7 @@
   let focusBeforeDialog = null;
   let confirmCallback = null;
   let fileRequest = 0;
+  let plantPhotoDraft = null;
   let installPrompt = null;
   let offlineState = window.isSecureContext && "serviceWorker" in navigator ? "pending" : "unavailable";
 
@@ -163,6 +164,7 @@
       case "sicherung": view.innerHTML = ui.backupPage(database, recoveryCopy !== null); break;
       default: view.innerHTML = ui.dashboard(plants, displayedDay, taskTab, demo);
     }
+    BW.photos.populate(view);
   }
 
   function goTo(name) {
@@ -182,6 +184,7 @@
     if (!dialog.open) dialog.showModal();
     dialog.scrollTop = 0;
     dialogContent.querySelector(autofocus)?.focus({ preventScroll: true });
+    BW.photos.populate(dialogContent);
   }
 
   function closeDialog() {
@@ -207,8 +210,70 @@
       return;
     }
     const choices = [...new Set(database.plants.map(item => item.place))].sort((a, b) => a.localeCompare(b, "de"));
-    present(ui.plantForm(plant, choices, BW.day()));
+    clearPlantPhotoDraft();
+    plantPhotoDraft = { original: plant?.photoId ?? null, file: null, url: null, removed: false, pending: false, ticket: 0 };
+    present(ui.plantForm(plant, choices, BW.day(), !plant || !inDemo()));
     if (plant) dialog.querySelector("form").dataset.profileChosen = "true";
+  }
+
+  function clearPlantPhotoDraft() {
+    if (plantPhotoDraft?.url) URL.revokeObjectURL(plantPhotoDraft.url);
+    plantPhotoDraft = null;
+  }
+
+  function updatePlantPhoto(form, text = "", error = false) {
+    const preview = form.querySelector("#plant-photo-preview");
+    const draft = plantPhotoDraft;
+    if (!preview || !draft) return;
+    const savedPhoto = !draft.removed && !draft.file ? draft.original : "";
+    preview.dataset.plantPhoto = savedPhoto || "";
+    preview.src = draft.url || ui.photoSource(field(form, "profile").value);
+    const status = form.querySelector("#plant-photo-status");
+    status.textContent = text || (savedPhoto ? "Eigenes Foto gespeichert." : draft.file ? "Foto zum Speichern bereit."
+      : "Dein Foto erscheint auf der Pflanzenkarte.");
+    status.className = error ? "error-text" : "help";
+    form.querySelector('[data-action="plant-photo-remove"]').hidden = !savedPhoto && !draft.file && !draft.pending;
+    if (savedPhoto) BW.photos.populate(form);
+  }
+
+  async function choosePlantPhoto(input) {
+    const form = input.form;
+    const file = input.files[0];
+    input.value = "";
+    const draft = plantPhotoDraft;
+    if (!file || !draft || form.dataset.saving) return;
+    const ticket = ++draft.ticket;
+    draft.pending = true;
+    updatePlantPhoto(form, "Foto wird vorbereitet …");
+    try {
+      const blob = await BW.photos.prepare(file);
+      if (draft !== plantPhotoDraft || ticket !== draft.ticket || !form.isConnected) return;
+      if (draft.url) URL.revokeObjectURL(draft.url);
+      Object.assign(draft, { file: blob, url: URL.createObjectURL(blob), removed: false, pending: false });
+      updatePlantPhoto(form);
+    } catch (error) {
+      if (draft !== plantPhotoDraft || ticket !== draft.ticket || !form.isConnected) return;
+      draft.pending = false;
+      updatePlantPhoto(form, error.message, true);
+    }
+  }
+
+  function removePlantPhoto(form) {
+    const draft = plantPhotoDraft;
+    if (!draft || form.dataset.saving) return;
+    if (draft.url) URL.revokeObjectURL(draft.url);
+    Object.assign(draft, { ticket: draft.ticket + 1, file: null, url: null, pending: false, removed: true });
+    updatePlantPhoto(form, "Das eigene Foto wird beim Speichern entfernt.");
+  }
+
+  function findProfiles(form, chosen = field(form, "profile").value) {
+    const query = field(form, "profileSearch").value;
+    field(form, "profile").innerHTML = ui.profilesOptions(chosen, query);
+    const count = ui.profileMatches(query).length;
+    const help = form.querySelector("#profile-help");
+    help.textContent = query.trim() ? (count ? ui.countText(count, "passendes Profil", "passende Profile")
+      : "Keine passende Art gefunden. Versuche einen anderen Namen oder wähle eine eigene Art.")
+      : `Suche in ${count} Arten oder wähle eine eigene Art.`;
   }
 
   const dueTasks = () => {
@@ -262,7 +327,8 @@
     return input.value ? Number(input.value) : null;
   }
 
-  function submitPlant(form) {
+  async function submitPlant(form) {
+    if (form.dataset.saving) return false;
     const name = field(form, "name").value.trim();
     const place = field(form, "place").value.trim();
     const repotted = field(form, "repottedOn");
@@ -277,18 +343,44 @@
     }
     if (Number.isNaN(interval)) return formError(form, "Der Prüfrhythmus muss eine ganze Zahl von 1 bis 90 Tagen sein.", every);
     if (!BW.own(BW.profiles, profile)) return formError(form, "Wähle eines der Pflanzenprofile.", field(form, "profile"));
-    const details = { name, place, profile, notes: field(form, "notes").value.trim(), repottedOn: repotted.value || null, interval };
     const existing = form.dataset.id ? findPlant(form.dataset.id) : null;
     if (form.dataset.id && !existing) return formError(form, "Die Pflanze ist nicht mehr vorhanden.");
+    if (!existing && database.plants.length >= BW.limits.plants) return formError(form, "Es sind bereits 250 Pflanzen angelegt.");
+    const draft = plantPhotoDraft;
+    if (draft?.pending) return formError(form, "Das Foto wird noch vorbereitet.");
+    let photoId = draft?.removed ? null : existing?.photoId ?? null;
     let plant;
-    if (existing) {
-      plant = { ...existing, ...details };
-      updatePlant(existing, plant);
-    } else {
-      if (database.plants.length >= BW.limits.plants) return formError(form, "Es sind bereits 250 Pflanzen angelegt.");
-      plant = { ...details, id: BW.id(), createdOn: today, history: [] };
-      persist({ ...database, prefs: { ...database.prefs, examples: false }, plants: [...database.plants, plant] });
+    const stagedId = draft?.file ? BW.id() : null;
+    const saveButton = form.querySelector('[type="submit"]');
+    form.dataset.saving = "true";
+    saveButton.disabled = true;
+    const draftDetails = { name, place, profile, notes: field(form, "notes").value.trim(), repottedOn: repotted.value || null, interval };
+    try {
+      if (stagedId) {
+        await BW.photos.put([[stagedId, draft.file]]);
+        if (!form.isConnected || !dialog.open || draft !== plantPhotoDraft) {
+          void BW.photos.remove([stagedId]).catch(() => {});
+          return false;
+        }
+        photoId = stagedId;
+      }
+      const details = { ...draftDetails, photoId };
+      if (existing) {
+        plant = { ...existing, ...details };
+        updatePlant(existing, plant);
+      } else {
+        plant = { ...details, id: BW.id(), createdOn: today, history: [] };
+        persist({ ...database, prefs: { ...database.prefs, examples: false }, plants: [...database.plants, plant] });
+      }
+    } catch (error) {
+      if (stagedId) void BW.photos.remove([stagedId]).catch(() => {});
+      throw error;
+    } finally {
+      delete form.dataset.saving;
+      saveButton.disabled = false;
     }
+    if (existing?.photoId && existing.photoId !== photoId) void BW.photos.remove([existing.photoId]).catch(() => {});
+    clearPlantPhotoDraft();
     search = "";
     room = "";
     taskTab = "due";
@@ -659,7 +751,7 @@
     const request = ++fileRequest;
     statusImport("");
     try {
-      if (file.size > BW.limits.bytes) throw new Error("Die Sicherung ist zu groß. Maximal 2 MB sind möglich.");
+      if (file.size > BW.backupBytes) throw new Error("Die Sicherung ist zu groß. Maximal 72 MB sind möglich.");
       const bytes = await file.arrayBuffer();
       if (request !== fileRequest || activeView !== "sicherung") return;
       let text;
@@ -668,7 +760,10 @@
       } catch {
         throw new Error("Die Datei enthält ungültige Zeichen. Wähle eine vollständige Blattwerk-Sicherung im UTF-8-Format.");
       }
-      const restored = BW.readData(text);
+      const archive = BW.readBackup(text);
+      const { data: restored, entries } = await BW.photos.importPhotos(archive.data, archive.photos);
+      if (request !== fileRequest || activeView !== "sicherung") return;
+      const expectedRaw = lastRaw;
       const hasData = lastRaw !== null;
       const counts = data => ui.countText(data.plants.length, "Pflanze", "Pflanzen") + ", "
         + ui.countText(data.readings.length, "Lichtmessung", "Lichtmessungen") + " und "
@@ -676,20 +771,27 @@
       const introduction = `Die Sicherung enthält ${counts(restored)}.`;
       const effect = recoveryCopy !== null ? " Sie ersetzt die aktuell beschädigten Daten."
         : hasData ? ` Sie ersetzt den aktuellen Stand mit ${counts(database)}.` : "";
-      ask("Sicherung wiederherstellen?", introduction + effect, hasData ? "Vorhandene Daten ersetzen" : "Wiederherstellen", () => {
+      ask("Sicherung wiederherstellen?", introduction + effect, hasData ? "Vorhandene Daten ersetzen" : "Wiederherstellen", async () => {
+        const oldPhotos = database.plants.map(plant => plant.photoId).filter(Boolean);
         try {
+          await BW.photos.put(entries);
+          if (lastRaw !== expectedRaw || request !== fileRequest) throw new Error("Die Daten haben sich geändert. Wähle die Sicherung erneut.");
           persist(restored, true);
-          search = "";
-          room = "";
-          taskTab = "due";
-          lightDraft = newLightDraft();
-          cameraDraft = BW.camera.draft();
-          demoLightName = "";
-          render();
-          notify("Sicherung wiederhergestellt.");
         } catch (error) {
+          void BW.photos.remove(entries.map(([id]) => id)).catch(() => {});
           statusImport(error.message);
+          syncIfNeeded();
+          return;
         }
+        void BW.photos.remove(oldPhotos).catch(() => {});
+        search = "";
+        room = "";
+        taskTab = "due";
+        lightDraft = newLightDraft();
+        cameraDraft = BW.camera.draft();
+        demoLightName = "";
+        render();
+        notify("Sicherung wiederhergestellt.");
       }, hasData ? "danger" : "primary");
     } catch (error) {
       if (request === fileRequest && activeView === "sicherung") statusImport(error.message || "Die Datei konnte nicht gelesen werden.");
@@ -699,6 +801,7 @@
   function deletePlant(plant) {
     ask("Pflanze löschen?", `„${plant.name}“ wird mit ihrem Pflegeverlauf gelöscht. Lichtmessungen und Kameravergleiche werden dem Pflanzenprofil zugeordnet.`, "Pflanze löschen", () => {
       updatePlant(plant, null);
+      if (plant.photoId) void BW.photos.remove([plant.photoId]).catch(() => {});
       closeDialog();
       render();
       notify("Pflanze gelöscht.");
@@ -727,7 +830,23 @@
   }
 
   function refreshPlantCards() {
-    view.querySelector("#plant-results").innerHTML = ui.plantCards(visiblePlants(), BW.day(), search, room);
+    const results = view.querySelector("#plant-results");
+    results.innerHTML = ui.plantCards(visiblePlants(), BW.day(), search, room);
+    BW.photos.populate(results);
+  }
+
+  async function downloadBackup(button) {
+    button.disabled = true;
+    try {
+      const backup = await BW.photos.makeBackup(database);
+      BW.download(`blattwerk-sicherung-${BW.day()}.json`, backup, "application/json;charset=utf-8");
+      notify("Sicherung als JSON heruntergeladen.");
+    } catch (error) {
+      statusImport(error.message);
+      notify(error.message);
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function updateOfflineStatus() {
@@ -747,6 +866,57 @@
     const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
     present(ui.installDialog(standalone, !standalone && installPrompt !== null));
     updateOfflineStatus();
+  }
+
+  function openPushDialog() {
+    const settings = BW.push.read();
+    present(ui.pushDialog(settings));
+    const status = dialog.querySelector("#push-status");
+    if (!settings?.active) return;
+    void BW.push.refresh(settings).then(answer => {
+      if (!status.isConnected || !dialog.open) return;
+      if (!answer.active) status.textContent = "Der Dienst hat gerade keinen aktiven Zeitplan. Speichere den Zeitplan erneut.";
+      else if (Number.isFinite(answer.nextAt)) {
+        const next = new Intl.DateTimeFormat("de-DE", { dateStyle: "medium", timeStyle: "short" }).format(new Date(answer.nextAt));
+        status.textContent = `Nächste Pflanzenrunde am ${next}.`;
+      }
+    }).catch(() => {
+      if (status.isConnected && dialog.open) status.textContent = "Der Push-Dienst ist momentan nicht erreichbar. Versuche es später erneut.";
+    });
+  }
+
+  async function submitPush(form, type) {
+    const button = form.querySelector('button[type="submit"]');
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      const settings = type === "push-connect"
+        ? await BW.push.connect(field(form, "pushService").value, field(form, "pushCode").value)
+        : await BW.push.activate(BW.push.read(), field(form, "pushTime").value, Number(field(form, "pushDays").value));
+      if (form.isConnected && dialog.open) present(ui.pushDialog(settings));
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function pushAction(control, action) {
+    const settings = BW.push.read();
+    if (!settings) return;
+    control.disabled = true;
+    try {
+      if (action === "push-off") {
+        const { paused, remote } = await BW.push.deactivate(settings);
+        if (control.isConnected && dialog.open) present(ui.pushDialog(paused, remote
+          ? "Push-Erinnerungen pausiert." : "Auf diesem Gerät pausiert. Der Dienst war gerade nicht erreichbar."));
+      } else {
+        await BW.push.test(settings);
+        if (control.isConnected && dialog.open) dialog.querySelector("#push-status").textContent = "Der Mitteilungsdienst hat die Testanfrage angenommen.";
+      }
+    } catch (error) {
+      if (control.isConnected && dialog.open) dialog.querySelector("#push-status").textContent = error.message;
+    } finally {
+      control.disabled = false;
+    }
   }
 
   async function promptInstall() {
@@ -826,6 +996,9 @@
         break;
       }
       case "calendar": openCalendar(); break;
+      case "push": openPushDialog(); break;
+      case "push-test":
+      case "push-off": void pushAction(control, action); break;
       case "install": openInstallDialog(); break;
       case "install-prompt": void promptInstall(); break;
       case "light-mode":
@@ -836,6 +1009,10 @@
         view.querySelector('[data-action="light-mode"][aria-pressed="true"]')?.focus({ preventScroll: true });
         break;
       case "camera-file": document.getElementById(control.dataset.input)?.click(); break;
+      case "plant-photo-pick":
+        if (!control.closest("form").dataset.saving) document.getElementById(control.dataset.input)?.click();
+        break;
+      case "plant-photo-remove": removePlantPhoto(control.closest("form")); break;
       case "camera-preview": void openCameraPreview(control.dataset.slot); break;
       case "camera-take": void takeCameraPhoto(control); break;
       case "camera-fallback":
@@ -846,10 +1023,7 @@
       case "sensor": toggleSensor(); break;
       case "sensor-value": takeSensorValue(); break;
       case "import": view.querySelector("#import-file").click(); break;
-      case "export":
-        BW.download(`blattwerk-sicherung-${BW.day()}.json`, BW.writeData(database), "application/json;charset=utf-8");
-        notify("Sicherung als JSON heruntergeladen.");
-        break;
+      case "export": void downloadBackup(control); break;
       case "raw-export":
         BW.download(`blattwerk-rohdaten-${BW.day()}.txt`, recoveryCopy, "text/plain;charset=utf-8");
         notify("Rohdaten heruntergeladen.");
@@ -880,18 +1054,19 @@
     }
   });
 
-  document.addEventListener("submit", event => {
+  document.addEventListener("submit", async event => {
     const form = event.target;
     const { form: type } = form.dataset;
     if (!type) return;
     event.preventDefault();
     clearError(form);
     try {
-      if (type === "plant") submitPlant(form);
+      if (type === "plant") await submitPlant(form);
       else if (type === "check" || type === "feed") submitTask(form, type);
       else if (type === "light") submitLight(form);
       else if (type === "camera") submitCamera(form);
       else if (type === "calendar") submitCalendar(form);
+      else if (type === "push-connect" || type === "push-plan") await submitPush(form, type);
     } catch (error) {
       formError(form, error.message);
       if (!dialog.open && !confirmation.open) syncIfNeeded();
@@ -904,7 +1079,10 @@
       search = input.value;
       refreshPlantCards();
     } else if (input.form?.dataset.form === "plant" && input.name === "name" && !input.form.dataset.profileChosen) {
-      field(input.form, "profile").value = BW.guessProfile(input.value);
+      findProfiles(input.form, BW.guessProfile(input.value));
+      updatePlantPhoto(input.form);
+    } else if (input.form?.dataset.form === "plant" && input.name === "profileSearch") {
+      findProfiles(input.form);
     } else if (input.form?.dataset.form === "light" && ["lux", "spot"].includes(input.name)) {
       if (input.name === "lux") lightDraft.sensorLux = "";
       updateLightForm(input.form);
@@ -932,6 +1110,8 @@
       refreshPlantCards();
     } else if (input.id === "import-file") {
       void importFile(input);
+    } else if (type === "plant" && input.hasAttribute("data-plant-file")) {
+      void choosePlantPhoto(input);
     } else if (type === "camera" && input.dataset.photo) {
       void readCameraPhoto(input);
     } else if (type === "camera" && (input.name === "subject" || input.name === "sun")) {
@@ -939,6 +1119,7 @@
       updateCameraResult();
     } else if (type === "plant" && input.name === "profile") {
       input.form.dataset.profileChosen = "true";
+      updatePlantPhoto(input.form);
     } else if (type === "check" && ["moisture", "finding"].includes(input.name)) {
       updateTaskAdvice(input.form);
     } else if (type === "calendar" && input.name === "mode") {
@@ -961,6 +1142,7 @@
   dialog.addEventListener("close", () => {
     if (dialog.open) return;
     releaseCamera();
+    clearPlantPhotoDraft();
     roundRunning = false;
     const destination = focusBeforeDialog?.isConnected ? focusBeforeDialog : view.querySelector("h1");
     destination?.focus({ preventScroll: true });

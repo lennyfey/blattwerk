@@ -5,7 +5,8 @@
   const key = "blattwerk.v1";
   const utf8 = new TextEncoder();
   const format = "blattwerk";
-  const version = 2;
+  const version = 3;
+  const backupBytes = 72_000_000;
   const intervals = [2, 3, 7, 14, 28];
   const validTime = value => typeof value === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
   const record = value => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -41,16 +42,18 @@
       .map(value => value.toString(16).padStart(2, "0")).join("");
   }
 
-  function readData(json) {
-    if (utf8.encode(json).length > limits.bytes) throw new Error("Die Sicherung ist zu groß. Maximal 2 MB sind möglich.");
-    let data;
+  function parseData(json, maximum) {
+    if (json.length > maximum || utf8.encode(json).length > maximum) throw new Error("Die Sicherung ist zu groß.");
     try {
-      data = JSON.parse(json);
+      return JSON.parse(json);
     } catch {
       throw new Error("Die Datei enthält kein lesbares JSON. Wähle eine vollständige Blattwerk-Sicherung.");
     }
+  }
+
+  function normalizeData(data) {
     if (!record(data) || data.format !== format) throw new Error("Die Datei ist keine Blattwerk-Sicherung.");
-    if (data.version !== 1 && data.version !== version) throw new Error("Diese Sicherung verwendet eine andere Blattwerk-Version.");
+    if (![1, 2, version].includes(data.version)) throw new Error("Diese Sicherung verwendet eine andere Blattwerk-Version.");
     const { prefs, plants, readings } = data;
     const comparisons = data.version === 1 ? [] : data.comparisons;
     if (!record(prefs) || typeof prefs.examples !== "boolean" || !validTime(prefs.calendarTime) || !intervals.includes(prefs.calendarDays)) {
@@ -64,6 +67,7 @@
     }
 
     const plantIds = new Set();
+    const photoIds = new Set();
     const cleanPlants = plants.map((plant, index) => {
       const label = `Pflanze ${index + 1}`;
       if (!record(plant) || !validId(plant.id) || plantIds.has(plant.id) || !validText(plant.name, 80, true)
@@ -73,6 +77,11 @@
         throw new Error(`${label} hat fehlende oder ungültige Angaben.`);
       }
       plantIds.add(plant.id);
+      const photoId = data.version === version ? plant.photoId ?? null : null;
+      if (photoId !== null && (!validId(photoId) || photoIds.has(photoId))) {
+        throw new Error(`${label} hat einen ungültigen Fotoverweis.`);
+      }
+      if (photoId !== null) photoIds.add(photoId);
       const history = plant.history.map(item => {
         const error = new Error(`${label} hat einen ungültigen Verlaufseintrag.`);
         if (!record(item) || !validDay(item.on) || !validText(item.note, 400)) throw error;
@@ -85,7 +94,7 @@
         return { kind, on, note, moisture, watered, leaves, location, finding, followUp };
       }).sort((a, b) => b.on.localeCompare(a.on));
       const { id, name, profile, place, notes, createdOn, repottedOn, interval } = plant;
-      return { id, name: name.trim(), profile, place: place.trim(), notes, createdOn, repottedOn, interval, history };
+      return { id, name: name.trim(), profile, place: place.trim(), notes, createdOn, repottedOn, interval, photoId, history };
     });
 
     const readingIds = new Set();
@@ -124,6 +133,22 @@
       readings: cleanReadings,
       comparisons: cleanComparisons
     };
+  }
+
+  function readData(json) {
+    return normalizeData(parseData(json, limits.bytes));
+  }
+
+  function readBackup(json) {
+    const raw = parseData(json, backupBytes);
+    const data = normalizeData(raw);
+    writeData(data);
+    const ids = new Set(data.plants.map(plant => plant.photoId).filter(Boolean));
+    const photos = raw.photos ?? {};
+    if (!record(photos) || Object.keys(photos).length !== ids.size || [...ids].some(id => !own(photos, id))) {
+      throw new Error("Die Sicherung enthält fehlende oder zusätzliche Pflanzenfotos.");
+    }
+    return { data, photos };
   }
 
   function writeData(data) {
@@ -194,5 +219,5 @@
     return lines.map(fold).join("\r\n") + "\r\n";
   }
 
-  Object.assign(window.BW, { key, intervals, validTime, blankData, examplePlants, id, readData, writeData, download, roundEvents, calendarFile });
+  Object.assign(window.BW, { key, intervals, validTime, blankData, examplePlants, id, readData, readBackup, backupBytes, writeData, download, roundEvents, calendarFile });
 })();

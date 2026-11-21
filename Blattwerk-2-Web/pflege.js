@@ -58,7 +58,7 @@
     },
     zz: {
       name: "Glücksfeder", botanical: "Zamioculcas zamiifolia", aliases: ["Zamioculcas", "ZZ-Pflanze", "Zamie"],
-      light: "tolerant", temperature: "Etwa 18–26 °C",
+      image: "zz", light: "tolerant", temperature: "Etwa 18–26 °C",
       warmDays: 12, coolDays: 21, retryDays: 5, feedDays: 100, feedType: "Grünpflanzendünger",
       measure: "Mit einem Stäbchen am Topfrand bis etwa zur halben Ballentiefe testen. Die Erde auch tiefer abtrocknen lassen.",
       water: "Erst gießen, wenn das Substrat weitgehend trocken ist. Staunässe vermeiden. Die Rhizome speichern Wasser.",
@@ -67,7 +67,7 @@
     },
     rubber: {
       name: "Gummibaum", botanical: "Ficus elastica", aliases: ["Ficus elastica"],
-      light: "filtered", temperature: "Etwa 18–26 °C",
+      image: "rubber", light: "filtered", temperature: "Etwa 18–26 °C",
       warmDays: 7, coolDays: 12, retryDays: 3, feedDays: 28, feedType: "Grünpflanzendünger",
       measure: "Die oberen 3–4 cm Erde fühlen und bei großen Töpfen zusätzlich tiefer prüfen.",
       water: "Die oberste Erdschicht abtrocknen lassen. Dann gründlich gießen, abtropfen lassen und den Übertopf leeren.",
@@ -76,7 +76,7 @@
     },
     orchid: {
       name: "Schmetterlingsorchidee", botanical: "Phalaenopsis", aliases: ["Phalaenopsis", "Schmetterlingsorchidee"],
-      light: "filtered", temperature: "Etwa 17–25 °C",
+      image: "orchid", light: "filtered", temperature: "Etwa 17–25 °C",
       warmDays: 6, coolDays: 9, retryDays: 2, feedDays: 21, feedType: "Orchideendünger",
       measure: "Bei Rindensubstrat sichtbare Wurzeln, Kondenswasser und Topfgewicht prüfen. Helle, silbrige Wurzeln und ein leichter Topf sprechen für Bedarf.",
       water: "Bei fast trockenem Substrat wässern und gut abtropfen lassen. Kein Wasser im Herz der Pflanze oder im Übertopf stehen lassen.",
@@ -85,7 +85,7 @@
     },
     aloe: {
       name: "Aloe vera", botanical: "Aloe vera", aliases: ["Echte Aloe", "Aloe"],
-      light: "sunny", temperature: "Warm, frostfrei",
+      image: "aloe", light: "sunny", temperature: "Warm, frostfrei",
       warmDays: 12, coolDays: 21, retryDays: 5, feedDays: 42, feedType: "Kakteendünger",
       measure: "Mit einem Stäbchen am Topfrand tiefer als die Oberfläche prüfen. Nur ein trockener, leichter Ballen spricht für Wasserbedarf.",
       water: "Fast vollständig trocknen lassen. In hellem, warmem Stand bei Bedarf wässern und vollständig abtropfen lassen. Im kühlen Winter sehr sparsam bleiben.",
@@ -163,12 +163,19 @@
 
   function guessProfile(name) {
     const words = ` ${normalize(name).replace(/[^a-z0-9]+/g, " ").trim()} `;
-    return Object.keys(profiles).find(key => {
-      if (key === "custom") return false;
-      const profile = profiles[key];
-      return [profile.name, profile.botanical, ...profile.aliases]
-        .some(alias => words.includes(` ${normalize(alias).replace(/[^a-z0-9]+/g, " ").trim()} `));
-    }) ?? "custom";
+    let best = "custom";
+    let score = 0;
+    for (const [key, profile] of Object.entries(profiles)) {
+      if (key === "custom") continue;
+      for (const alias of [profile.name, profile.botanical, ...profile.aliases]) {
+        const term = normalize(alias).replace(/[^a-z0-9]+/g, " ").trim();
+        if (term.length > score && words.includes(" " + term + " ")) {
+          best = key;
+          score = term.length;
+        }
+      }
+    }
+    return best;
   }
 
   const hasRecentRepot = (plant, today) => {

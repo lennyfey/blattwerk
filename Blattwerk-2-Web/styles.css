@@ -227,6 +227,14 @@ button.stat { cursor: pointer; }
 label, legend { font-weight: 650; }
 label.field { display: grid; gap: .36rem; align-self: start; }
 .field > span:first-child { font-size: .95rem; }
+.profile-picker { display: grid; gap: .42rem; }
+.photo-input {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .78rem; padding: .8rem;
+  border: 1px solid var(--line); border-radius: 12px; background: #f4f8f1;
+}
+.photo-input .plant-photo { width: 72px; height: 72px; border-radius: 11px; }
+.photo-input-content { display: grid; align-content: start; gap: .45rem; min-width: 0; }
+.photo-input-content .button { justify-content: flex-start; white-space: normal; }
 .help { color: var(--muted); font-size: .86rem; font-weight: 400; line-height: 1.42; }
 input:not([type="checkbox"], [type="radio"]), select, textarea {
   width: 100%; min-width: 0; min-height: 46px; border: 1px solid #cbd8cb; border-radius: 9px;
@@ -284,7 +292,7 @@ dialog.confirmation { width: min(calc(100% - 1rem), 480px); }
 .dialog-head p { margin-top: .34rem; color: var(--muted); font-size: .93rem; }
 .dialog-head .tag { margin-bottom: .25rem; }
 .detail-hero { display: flex; gap: .85rem; align-items: center; padding: .85rem; border: 1px solid var(--line); border-radius: 12px; background: var(--white); }
-.detail-hero .plant-photo { width: 74px; height: 74px; }
+.detail-hero .plant-photo { width: 92px; height: 92px; }
 .detail-hero .small { color: var(--muted); }
 .detail-hero p { white-space: pre-wrap; }
 .care-grid { display: grid; gap: .6rem; }

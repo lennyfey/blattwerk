@@ -1,6 +1,6 @@
 "use strict";
 
-const release = "2.0.0";
+const release = "2.1.0";
 const scope = new URL(self.registration.scope);
 const namespace = `blattwerk:${scope.href}:`;
 const cacheName = namespace + release;
@@ -9,7 +9,10 @@ const assets = new Set([
   "index.html",
   `styles.css?v=${release}`,
   `pflege.js?v=${release}`,
+  `arten.js?v=${release}`,
   `daten.js?v=${release}`,
+  `fotos.js?v=${release}`,
+  `push.js?v=${release}`,
   `kamera.js?v=${release}`,
   `oberflaeche.js?v=${release}`,
   `app.js?v=${release}`,
@@ -24,7 +27,34 @@ const assets = new Set([
   "assets/pothos.jpg",
   "assets/peace.jpg",
   "assets/spider.jpg",
-  "assets/haworthia.jpg"
+  "assets/haworthia.jpg",
+  "assets/zz.jpg",
+  "assets/rubber.jpg",
+  "assets/orchid.jpg",
+  "assets/aloe.jpg",
+  "assets/pilea.jpg",
+  "assets/fiddle.jpg",
+  "assets/ficus.jpg",
+  "assets/dragon.jpg",
+  "assets/coleus.jpg",
+  "assets/calathea.jpg",
+  "assets/maranta.jpg",
+  "assets/alocasia.jpg",
+  "assets/philo.jpg",
+  "assets/adansonii.jpg",
+  "assets/scindapsus.jpg",
+  "assets/syngonium.jpg",
+  "assets/anthurium.jpg",
+  "assets/castiron.jpg",
+  "assets/jade.jpg",
+  "assets/echeveria.jpg",
+  "assets/holiday.jpg",
+  "assets/cero.jpg",
+  "assets/hoya.jpg",
+  "assets/peperomia.jpg",
+  "assets/fern.jpg",
+  "assets/palm.jpg",
+  "assets/strelitzia.jpg"
 ].map(path => new URL(path, scope).href));
 
 self.addEventListener("install", event => {
@@ -53,5 +83,23 @@ self.addEventListener("fetch", event => {
   event.respondWith((async () => {
     const cache = await caches.open(cacheName);
     return (await cache.match(key)) ?? fetch(request);
+  })());
+});
+
+self.addEventListener("push", event => {
+  event.waitUntil(self.registration.showNotification("Blattwerk", {
+    body: "Zeit für deine Pflanzenrunde. Öffne Blattwerk und schau, was ansteht.",
+    icon: new URL("assets/app-icon-192.png", scope).href,
+    tag: "blattwerk-pflanzenrunde"
+  }));
+});
+
+self.addEventListener("notificationclick", event => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const current = windows.find(client => client.url.startsWith(scope.href));
+    if (current) return current.focus();
+    return self.clients.openWindow(new URL("./#uebersicht", scope).href);
   })());
 });

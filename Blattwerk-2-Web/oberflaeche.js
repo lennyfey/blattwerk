@@ -36,6 +36,7 @@
     upload: '<path d="M12 16V4m-4 4 4-4 4 4M4 16v4h16v-4"/>',
     camera: '<path d="M3 7h4l2-3h6l2 3h4v13H3z"/><circle cx="12" cy="13" r="3.25"/>',
     phone: '<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4"/>',
+    bell: '<path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5zm5 3a2 2 0 0 0 4 0"/>',
     bulb: '<path d="M9 18h6m-5 3h4M8 15c0-2-3-3.5-3-7a7 7 0 0 1 14 0c0 3.5-3 5-3 7Z"/>',
     alert: '<path d="M12 3 2.8 20h18.4L12 3Zm0 6v4m0 3h.01"/>'
   };
@@ -54,7 +55,17 @@
   const countText = (count, singular, plural) => `${count} ${count === 1 ? singular : plural}`;
   const opts = (options, value) => Object.entries(options)
     .map(([key, option]) => `<option value="${safe(key)}" ${selected(key, value)}>${safe(typeof option === "string" ? option : option.name)}</option>`).join("");
-  const profilesOptions = chosen => opts({ custom: profiles.custom, ...profiles }, chosen);
+  function profileMatches(query) {
+    const words = normalize(query).split(/[^a-z0-9]+/).filter(Boolean);
+    return Object.entries(profiles).filter(([key, profile]) => key !== "custom"
+      && words.every(word => normalize([profile.name, profile.botanical, ...profile.aliases].join(" ")).includes(word)))
+      .sort((a, b) => a[1].name.localeCompare(b[1].name, "de"));
+  }
+  function profilesOptions(chosen, query = "") {
+    const matches = profileMatches(query);
+    if (profiles[chosen] && chosen !== "custom" && !matches.some(([key]) => key === chosen)) matches.unshift([chosen, profiles[chosen]]);
+    return opts({ custom: profiles.custom, ...Object.fromEntries(matches) }, chosen);
+  }
   const emptyError = '<p class="error-text" data-form-error role="alert" hidden></p>';
   const sourceLink = (label, url) => `<a href="${safe(url)}" target="_blank" rel="noopener noreferrer">${safe(label)}</a>`;
   const numberFormat = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 1 });
@@ -66,10 +77,11 @@
       <p class="${dated ? "date-line" : ""}">${dated ? icon("calendar") : ""}${safe(subtitle)}</p></div>${action}</header>`;
   }
 
-  function photo(profileKey) {
-    const asset = profiles[profileKey].image;
-    return asset
-      ? `<img class="plant-photo" src="assets/${asset}.jpg" width="48" height="48" alt="" decoding="async">`
+  const photoSource = profile => profiles[profile]?.image ? "assets/" + profiles[profile].image + ".jpg" : "assets/mark.svg";
+
+  function photo(plant) {
+    return plant.photoId || profiles[plant.profile].image
+      ? `<img class="plant-photo" src="${photoSource(plant.profile)}" ${plant.photoId ? `data-plant-photo="${safe(plant.photoId)}"` : ""} width="48" height="48" alt="" decoding="async">`
       : `<span class="plant-photo">${icon("sprout")}</span>`;
   }
 
@@ -89,7 +101,7 @@
   function taskRow({ plant, kind, date }, today) {
     return `<div class="task-row">
       <button class="task-plant" type="button" data-action="detail" ${plantAttr(plant.id)}>
-        ${photo(plant.profile)}<span><strong>${safe(plant.name)}</strong><span class="small">${safe(plant.place)}</span></span>
+        ${photo(plant)}<span><strong>${safe(plant.name)}</strong><span class="small">${safe(plant.place)}</span></span>
       </button>
       <div class="task-info"><span class="task-kind">${icon(taskIcon(kind))}${taskName(kind)}</span>
       ${tag(dueLabel(date, today), date < today ? "warning" : date === today ? "positive" : "")}</div>
@@ -100,7 +112,7 @@
   function historyRow({ plant, item }) {
     return `<div class="task-row">
       <button class="task-plant" type="button" data-action="detail" ${plantAttr(plant.id)}>
-        ${photo(plant.profile)}<span><strong>${safe(plant.name)}</strong><span class="small">${safe(plant.place)}</span></span>
+        ${photo(plant)}<span><strong>${safe(plant.name)}</strong><span class="small">${safe(plant.place)}</span></span>
       </button>
       <div class="task-info"><span class="task-kind">${icon(taskIcon(item.kind))}${careText(item)}</span>${tag(shortDate(item.on), "positive")}</div>
       <span class="stat-icon task-button">${icon("check")}</span>
@@ -196,7 +208,7 @@
       const profile = profiles[plant.profile];
       const first = nextCheck(plant, today);
       return `<button class="card plant-card" type="button" data-action="detail" ${plantAttr(plant.id)}>
-        ${photo(plant.profile)}
+        ${photo(plant)}
         <span class="plant-card-body"><strong>${safe(plant.name)}</strong>
           ${profile.botanical ? `<span class="small muted">${safe(profile.botanical)}</span>` : ""}
           <span class="small muted">${icon("pin")} ${safe(plant.place)}</span>
@@ -228,7 +240,7 @@
       ${subtitle ? `<p>${safe(subtitle)}</p>` : ""}</div><button class="icon-button" data-action="close" type="button" aria-label="Schließen">${icon("close")}</button></header>`;
   }
 
-  function plantForm(plant, places, today) {
+  function plantForm(plant, places, today, allowPhoto = true) {
     return `<div class="dialog-body">${dialogHeader(plant ? "Pflanze bearbeiten" : "Pflanze hinzufügen",
       plant ? plant.name : "Name und Standort genügen für deinen ersten Prüftermin.")}
       <form class="stack" data-form="plant" ${plant ? plantAttr(plant.id) : ""} novalidate>
@@ -236,8 +248,28 @@
           <label class="field"><span>Name</span><input name="name" maxlength="80" required placeholder="z. B. Monstera" value="${safe(plant?.name ?? "")}"></label>
           <label class="field"><span>Standort</span><input name="place" maxlength="80" required list="known-places" placeholder="z. B. Bad" value="${safe(plant?.place ?? "")}"></label>
           <datalist id="known-places">${places.map(place => `<option value="${safe(place)}"></option>`).join("")}</datalist>
-          <label class="field wide"><span id="profile-label">Art für den Steckbrief</span><select name="profile" aria-labelledby="profile-label" aria-describedby="profile-help">${profilesOptions(plant?.profile ?? "custom")}</select>
-            <span id="profile-help" class="help">Blattwerk schlägt bei bekannten Namen ein Profil vor. Du kannst es anpassen.</span></label>
+          <div class="wide profile-picker">
+            <div class="form-grid columns">
+              <label class="field"><span>Art suchen</span><input name="profileSearch" type="search" maxlength="80" placeholder="z. B. Calathea oder Pilea"></label>
+              <label class="field"><span id="profile-label">Art für den Steckbrief</span><select name="profile" aria-labelledby="profile-label" aria-describedby="profile-help">${profilesOptions(plant?.profile ?? "custom")}</select></label>
+            </div>
+            <p id="profile-help" class="help">Suche in ${Object.keys(profiles).length - 1} Arten oder wähle eine eigene Art.</p>
+          </div>
+          ${allowPhoto ? `<section class="wide photo-input" aria-labelledby="own-photo-title">
+            <img class="plant-photo" id="plant-photo-preview" src="${photoSource(plant?.profile ?? "custom")}"
+              data-plant-photo="${safe(plant?.photoId ?? "")}" alt="Vorschau des Pflanzenbilds" width="80" height="80">
+            <div class="photo-input-content">
+              <strong id="own-photo-title">Eigenes Pflanzenfoto</strong>
+              <p id="plant-photo-status" class="help" role="status">${plant?.photoId ? "Eigenes Foto gespeichert." : "Dein Foto erscheint auf der Pflanzenkarte und bleibt auf dem Gerät."}</p>
+              <input type="file" id="plant-photo-file" accept="image/*,.heic,.heif" data-plant-file hidden>
+              <input type="file" id="plant-photo-camera" accept="image/*" capture="environment" data-plant-file hidden>
+              <div class="cluster">
+                ${button("Foto auswählen", "plant-photo-pick", "secondary compact", "camera", 'data-input="plant-photo-file"')}
+                ${button("Foto aufnehmen", "plant-photo-pick", "soft compact camera-capture", "", 'data-input="plant-photo-camera"')}
+                ${button("Eigenes Foto entfernen", "plant-photo-remove", "text compact", "", plant?.photoId ? "" : "hidden")}
+              </div>
+            </div>
+          </section>` : ""}
           <label class="field"><span id="repot-label">Zuletzt umgetopft${optional}</span><input type="date" name="repottedOn" min="1900-01-01" max="${today}" aria-labelledby="repot-label" aria-describedby="repot-help" value="${plant?.repottedOn ?? ""}">
             <span class="help" id="repot-help">Das Datum passt Prüfungen und Düngepause an.</span></label>
           <label class="field"><span id="interval-label">Eigener Prüfrhythmus${optional}</span><input type="number" name="interval" min="1" max="90" step="1" placeholder="Automatisch" aria-labelledby="interval-label" aria-describedby="interval-help" value="${plant?.interval ?? ""}">
@@ -268,7 +300,7 @@
       </li>`).join("");
     return `<div class="dialog-body">
       ${dialogHeader(plant.name, profile.botanical || "Eigener Steckbrief", demo ? tag("Beispielpflanze", "positive") : "")}
-      <div class="detail-hero">${photo(plant.profile)}<div><strong>${icon("pin")} ${safe(plant.place)}</strong>
+      <div class="detail-hero">${photo(plant)}<div><strong>${icon("pin")} ${safe(plant.place)}</strong>
         <p class="small">${plant.repottedOn ? "Umgetopft am " + longDate(plant.repottedOn) : "Umtopfdatum offen"}</p>
         ${plant.notes ? `<p class="small">${safe(plant.notes)}</p>` : ""}</div></div>
       <div class="care-grid">
@@ -566,7 +598,7 @@
     return pageHeader("Datensicherung", "Sichern und auf einem anderen Gerät weitermachen") + `
       <div class="backup-grid">
         <section class="card guide-card"><span class="feature-icon">${icon("download")}</span><h2 class="section-title">Sicherung herunterladen</h2>
-          <p>Die JSON-Datei enthält deine Pflanzen, Pflegeverläufe, Einstellungen, Lichtmessungen und Kameravergleiche.</p>
+          <p>Die JSON-Datei enthält deine Pflanzen, eigenen Fotos, Pflegeverläufe und Lichtmessungen.</p>
           <p class="muted small">${countText(data.plants.length, "Pflanze", "Pflanzen")} · ${countText(data.readings.length, "Lichtmessung", "Lichtmessungen")} · ${countText(data.comparisons.length, "Kameravergleich", "Kameravergleiche")}</p>
           <div class="cluster">
             ${hasBrokenCopy ? button("Rohdaten sichern", "raw-export", "primary", "download") : button("JSON exportieren", "export", "primary", "download")}
@@ -605,9 +637,43 @@
     return `<div class="dialog-body">${dialogHeader("Mehr")}
       <div class="menu-links">
         ${button("Kalender-Erinnerung", "calendar", "secondary", "calendar")}
+        ${button("Push-Erinnerungen", "push", "secondary", "bell")}
         ${button("App installieren", "install", "secondary", "phone")}
         ${link("Datensicherung", "sicherung", "secondary", "archive")}
       </div></div>`;
+  }
+
+  function pushDialog(settings, message = "") {
+    const canReceive = BW.push.supported();
+    const active = Boolean(settings?.active);
+    const next = active && Number.isFinite(settings.nextAt)
+      ? "Nächste Pflanzenrunde am " + instantFormat.format(new Date(settings.nextAt)) + "." : "";
+    return `<div class="dialog-body">${dialogHeader("Push-Erinnerungen", "Erinnert dich an deine Pflanzenrunde, auch wenn Blattwerk geschlossen ist.")}
+      ${!canReceive ? '<p class="notice warning small">Öffne Blattwerk auf dem iPhone über das Symbol auf dem Home-Bildschirm. Aktiviere dort die Mitteilungen.</p>' : ""}
+      <p class="notice" id="push-status" role="status">${safe(message || (active ? next || "Push ist eingerichtet." : settings ? "Push-Dienst verbunden. Wähle jetzt deinen Zeitplan." : "Verbinde zuerst einen eingerichteten Blattwerk-Push-Dienst."))}</p>
+      ${settings ? `<form class="stack" data-form="push-plan" novalidate>
+          <div class="form-grid columns">
+            <label class="field"><span>Uhrzeit</span><input name="pushTime" type="time" value="${safe(settings.time)}" required></label>
+            <label class="field"><span>Wiederholen</span><select name="pushDays">${BW.push.daysOptions.map(days =>
+              `<option value="${days}" ${selected(days, settings.days)}>${days === 1 ? "Täglich" : "Alle " + days + " Tage"}</option>`).join("")}</select></label>
+          </div>
+          ${emptyError}
+          <div class="form-actions">
+            ${active ? button("Test senden", "push-test", "secondary", "bell") : ""}
+            <button type="submit" class="button primary" ${canReceive ? "" : "disabled"}>${icon("bell")} ${active ? "Zeitplan speichern" : "Push aktivieren"}</button>
+            ${active ? button("Pausieren", "push-off", "secondary") : ""}
+          </div>
+        </form>` : ""}
+      ${!active ? `${settings ? '<details class="details-panel"><summary>Push-Dienst wechseln</summary>' : ""}
+        ${settings ? "" : '<p class="help">Adresse und Code erhältst du bei der einmaligen Einrichtung am Laptop. Die Anleitung liegt im Paket „Blattwerk-Push-Dienst“.</p>'}
+        <form class="stack" data-form="push-connect" novalidate>
+          <label class="field"><span>Adresse des Push-Dienstes</span><input name="pushService" placeholder="https://…workers.dev" type="url" autocomplete="off" maxlength="240" value="${safe(settings?.service ?? "")}" required></label>
+          <label class="field"><span>Einrichtungscode</span><input name="pushCode" type="password" required maxlength="100" autocomplete="off"></label>
+          ${emptyError}<div class="form-actions"><button type="submit" class="button secondary">Dienst verbinden</button></div>
+        </form>
+        ${settings ? "</details>" : ""}` : ""}
+      <p class="help">Der Dienst erhält die Browser-Anmeldung, Uhrzeit und Zeitzone. Push wird für jedes Gerät einzeln eingerichtet.</p>
+    </div>`;
   }
 
   function installDialog(standalone, offer) {
@@ -624,9 +690,9 @@
 
   Object.assign(BW, {
     ui: {
-      icon, safe, button, countText, dashboard, plantsPage, plantCards, plantForm, plantDetail,
+      icon, safe, button, countText, dashboard, plantsPage, plantCards, plantForm, plantDetail, profileMatches, profilesOptions, photoSource,
       taskForm, lightPage, lightReadings, lightResult, cameraPage, cameraResult, cameraDialog, comparisonList,
-      knowledgePage, backupPage, calendarDialog, moreMenu, installDialog, numberFormat
+      knowledgePage, backupPage, calendarDialog, moreMenu, installDialog, pushDialog, numberFormat
     }
   });
 })();
