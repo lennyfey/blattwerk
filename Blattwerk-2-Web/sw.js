@@ -3,10 +3,11 @@
 const release = "2.1.0";
 const scope = new URL(self.registration.scope);
 const namespace = `blattwerk:${scope.href}:`;
-const cacheName = namespace + release;
+const cacheName = namespace + release + ":2";
 const appPage = new URL("index.html", scope);
+const offlinePage = new URL(`index.html?v=${release}`, scope);
 const assets = new Set([
-  "index.html",
+  `index.html?v=${release}`,
   `styles.css?v=${release}`,
   `pflege.js?v=${release}`,
   `arten.js?v=${release}`,
@@ -58,9 +59,15 @@ const assets = new Set([
 ].map(path => new URL(path, scope).href));
 
 self.addEventListener("install", event => {
-  event.waitUntil(caches.open(cacheName).then(cache => cache.addAll(
-    [...assets].map(url => new Request(url, { cache: "reload" }))
-  )));
+  event.waitUntil((async () => {
+    const cache = await caches.open(cacheName);
+    await cache.addAll([...assets].map(url => new Request(url, { cache: "reload" })));
+    const page = await cache.match(offlinePage.href);
+    if (!page || !(await page.text()).includes(`src="app.js?v=${release}"`)) {
+      throw new Error("Die Offline-Startseite passt noch nicht zur App-Version.");
+    }
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", event => {
@@ -79,7 +86,7 @@ self.addEventListener("fetch", event => {
   const appNavigation = request.mode === "navigate" && url.origin === scope.origin
     && (url.pathname === scope.pathname || url.pathname === appPage.pathname);
   if (!appNavigation && !assets.has(url.href)) return;
-  const key = appNavigation ? appPage.href : url.href;
+  const key = appNavigation ? offlinePage.href : url.href;
   event.respondWith((async () => {
     const cache = await caches.open(cacheName);
     return (await cache.match(key)) ?? fetch(request);
